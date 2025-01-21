@@ -1,0 +1,20 @@
+{
+  "name": "fia_backend",
+  "version": "1.0.0",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "cron": "^3.3.2",
+    "express": "^4.21.2",
+    "mongoose": "^8.9.3",
+    "node-cron": "^3.0.3",
+    "nodemon": "^3.1.9"
+  }
+}
