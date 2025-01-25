@@ -605,9 +605,9 @@ app.get('/api/pie', async (req, res) => {
         //console.log(records);
 
         records.forEach(record => {
-            if (record.partNumber === '9253010232') {
+            if (record.partNumber === '9253020232') {
                 result['BIG CYLINDER'] = record.count;
-            } else if (record.partNumber === '9253020242') {
+            } else if (record.partNumber === '9253010242') {
                 result['SMALL CYLINDER'] = record.count;
             }
         });
