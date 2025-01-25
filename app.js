@@ -95,7 +95,6 @@ app.post('/spark/data', async (req, res) => {
         
         // Validate part number
         if (partNumber !== 9253010242 && partNumber !== 9253020232) {
-            console.log("Invalid part number");
             return res.status(400).json({
                 success: false,
                 message: 'Invalid part number'
@@ -104,7 +103,6 @@ app.post('/spark/data', async (req, res) => {
 
         const currentShift = getCurrentShift();
         if (!currentShift) {
-            console.log("Production data can only be recorded during shift hours");
             return res.status(400).json({
                 success: false,
                 message: 'Production data can only be recorded during shift hours'
@@ -143,7 +141,7 @@ app.post('/spark/data', async (req, res) => {
 
         let partDetails;
         if (existingPart) {
-            console.log("existingPart",existingPart);
+            
             // // Validate count increase
             // if (count <= existingPart.count) {
             //     return res.status(400).json({
@@ -170,7 +168,6 @@ app.post('/spark/data', async (req, res) => {
                 { new: true }
             );
         } else {
-            console.log("new part");
             // Create new record
             partDetails = new PartDetails({
                 partNumber: partNumber.toString(),
@@ -218,8 +215,6 @@ app.post('/spark/data', async (req, res) => {
             },
             { upsert: true, new: true }
         );
-        console.log("partDetails",partDetails);
-
         res.status(200).json({
             success: true,
             message: existingPart ? 'Part count updated successfully' : 'New part record created',
