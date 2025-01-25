@@ -212,7 +212,7 @@ app.post('/spark/data', async (req, res) => {
             },
             { upsert: true, new: true }
         );
-
+        console.log("smart");
         res.status(200).json({
             success: true,
             message: existingPart ? 'Part count updated successfully' : 'New part record created',
