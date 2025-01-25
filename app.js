@@ -88,7 +88,9 @@ function getCurrentShift() {
 
 app.post('/spark/data', async (req, res) => {
     try {
-        const {partNumber, count, target} = req.body;
+        const partNumber = parseInt(req.body.partNumber);
+        const count = req.body.count; 
+        const target = req.body.target;
         console.log(partNumber,count,target);
         
         // Validate part number
