@@ -644,6 +644,7 @@ app.post('/api/production', async (req, res) => {
         }
 
         res.status(200).json({
+            success: true,
             plan: latestProduction.target,
             actual: latestProduction.count,
             lastUpdated: getISTDateTime(latestProduction.lastUpdated).toISOString()
@@ -656,8 +657,7 @@ app.post('/api/production', async (req, res) => {
             error: error.message
         });
     }
-});
-
+})
 app.get('/api/oee-history', async (req, res) => {
     try {
         // Include shift in projection
