@@ -847,14 +847,14 @@ app.get('/api/monthly-stats', async (req, res) => {
             },
             stats: {
                 'BIG CYLINDER': {
-                    partNumber: '9253010242',
+                    partNumber: '9253020232',
                     totalProduction: 0,
                     goodCount: 0,
                     totalRejections: 0,
                     rejectionsByReason: []
                 },
                 'SMALL CYLINDER': {
-                    partNumber: '9253020232',
+                    partNumber: '9253010242',
                     totalProduction: 0,
                     goodCount: 0,
                     totalRejections: 0,
@@ -865,13 +865,13 @@ app.get('/api/monthly-stats', async (req, res) => {
 
         // Process production data
         productionData.forEach(prod => {
-            const partName = prod._id === '9253010242' ? 'BIG CYLINDER' : 'SMALL CYLINDER';
+            const partName = prod._id === '9253020232' ? 'BIG CYLINDER' : 'SMALL CYLINDER';
             monthlyStats.stats[partName].totalProduction = prod.totalProduction;
         });
 
         // Process rejection data
         rejectionData.forEach(rej => {
-            const partName = rej._id === '9253010242' ? 'BIG CYLINDER' : 'SMALL CYLINDER';
+            const partName = rej._id === '9253020232' ? 'BIG CYLINDER' : 'SMALL CYLINDER';
             monthlyStats.stats[partName].totalRejections = rej.totalRejections;
             monthlyStats.stats[partName].rejectionsByReason = rej.rejectionsByReason;
             monthlyStats.stats[partName].goodCount = 
