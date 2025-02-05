@@ -113,7 +113,9 @@ app.post('/spark/data', async (req, res) => {
         const today = getISTDateTime();
 
         const timeString = today.toISOString();
-        const time = timeString.slice(11, 16); 
+        console.log(timeString);
+        const time = timeString.slice(11, 16);
+        console.log(time);
         if(  (time >= '00:00' && time <= '07:00')){
             today.setDate(today.getDate() - 1);
         }
@@ -138,6 +140,8 @@ app.post('/spark/data', async (req, res) => {
                 $lt: endOfDay
             }
         });
+
+        console.log(existingPart)
 
         let partDetails;
         if (existingPart) {
@@ -174,22 +178,22 @@ app.post('/spark/data', async (req, res) => {
                 count,
                 target,
                 shift: currentShift,
-                date:  getISTDateTime(),
+                date:  getISTDateTime(),    
                 lastUpdated: getISTDateTime()
             });
             await partDetails.save();
         }
 
-         // Add hourly production tracking
-         const currentHour = getISTDateTime().toLocaleTimeString('en-US', { 
+        // Add hourly production tracking
+        const currentHour = getISTDateTime().toLocaleTimeString('en-US', { 
             hour12: false, 
-            hour: '2-digit', 
+            hour: '2-digit',
             minute: '2-digit',
             timeZone: 'Asia/Kolkata'
-        });
+        }).slice(0, 5);
 
-        // Find the previous hour's cumulative count
-        const previousHourProduction = await HourlyProduction.findOne({
+        // Find the last hourly production record for this part and shift
+        const lastHourlyRecord = await HourlyProduction.findOne({
             partNumber: partNumber.toString(),
             shift: currentShift,
             date: {
@@ -198,23 +202,49 @@ app.post('/spark/data', async (req, res) => {
             }
         }).sort({ hour: -1 });
 
-        const previousCumulativeCount = previousHourProduction ? previousHourProduction.cumulativeCount : 0;
-        const hourlyCount = count - previousCumulativeCount;
-
-        // Update or create hourly production record
-        await HourlyProduction.findOneAndUpdate(
-            {
+        // Calculate the hourly count
+        let hourlyCount;
+        if (lastHourlyRecord) {
+            // If there's a previous record in the same shift
+            if (lastHourlyRecord.hour === currentHour) {
+                // If it's the same hour, the count is the difference from the last total
+                hourlyCount = count - lastHourlyRecord.cumulativeCount;
+                // Update existing record
+                await HourlyProduction.findOneAndUpdate(
+                    {
+                        _id: lastHourlyRecord._id
+                    },
+                    {
+                        count: lastHourlyRecord.count + hourlyCount,
+                        cumulativeCount: count
+                    }
+                );
+            } else {
+                // New hour, create new record
+                hourlyCount = count - lastHourlyRecord.cumulativeCount;
+                const newHourlyProduction = new HourlyProduction({
+                    partNumber: partNumber.toString(),
+                    shift: currentShift,
+                    date: getISTDateTime(),
+                    hour: time,
+                    count: hourlyCount,
+                    cumulativeCount: count
+                });
+                await newHourlyProduction.save();
+            }
+        } else {
+            // First record of the shift
+            hourlyCount = count;
+            const newHourlyProduction = new HourlyProduction({
                 partNumber: partNumber.toString(),
                 shift: currentShift,
                 date: getISTDateTime(),
-                hour: time
-            },
-            {
+                hour: time,
                 count: hourlyCount,
                 cumulativeCount: count
-            },
-            { upsert: true, new: true }
-        );
+            });
+            await newHourlyProduction.save();
+        }
         res.status(200).json({
             success: true,
             message: existingPart ? 'Part count updated successfully' : 'New part record created',
