@@ -43,20 +43,36 @@ function getISTDateTime(date = new Date()) {
 
 // Helper function to get start and end of IST day
 function getISTDayBounds(date) {
-    //.log("istDate",istDate);
     // Convert input to Date if string
-    const inputDate = typeof date === 'string' ? new Date(date) : date;
+    const inputDate = new Date(date);
+    console.log(inputDate);
     
-    // Get IST date
-    //const istDate = getISTDateTime(inputDate);
+    // Create IST date by adding 5:30 hours offset
+    const istDate = new Date(inputDate.getTime() + (5.5 * 60 * 60 * 1000));
     
-    let startOfDay = new Date(inputDate);
-    startOfDay.setUTCHours(0, 0, 0, 0);
-    let endOfDay = new Date(inputDate);
-    endOfDay.setUTCHours(23, 59, 59, 999);
-    startOfDay = startOfDay.toISOString();
-    endOfDay = endOfDay.toISOString();
-    return { startOfDay, endOfDay };
+    // Create start of day in IST (previous day 18:30 UTC)
+    const startOfDay = new Date(Date.UTC(
+        istDate.getFullYear(),
+        istDate.getMonth(),
+        istDate.getDate() - 1,
+        18, 30, 0, 0  // 18:30 UTC = 00:00 IST
+    ));
+    
+    // Create end of day in IST (next day 18:29:59.999 UTC)
+    const endOfDay = new Date(Date.UTC(
+        istDate.getFullYear(),
+        istDate.getMonth(),
+        istDate.getDate(),
+        18, 29, 59, 999  // 18:29:59.999 UTC = 23:59:59.999 IST
+    ));
+
+    console.log("startOfDay (IST):", new Date(startOfDay.getTime() + (5.5 * 60 * 60 * 1000)));
+    console.log("endOfDay (IST):", new Date(endOfDay.getTime() + (5.5 * 60 * 60 * 1000)));
+    
+    return {
+        startOfDay: new Date(startOfDay.getTime() + (5.5 * 60 * 60 * 1000)),
+        endOfDay: new Date(endOfDay.getTime() + (5.5 * 60 * 60 * 1000))
+    };
 }
 
 
@@ -121,9 +137,8 @@ app.post('/spark/data', async (req, res) => {
         }
 
         let { startOfDay, endOfDay } = getISTDayBounds(today);
-        startOfDay = new Date(startOfDay);
-        endOfDay = new Date(endOfDay);
-
+        
+        console.log(startOfDay,endOfDay);
 
         
         today.setUTCHours(0, 0, 0, 0);
@@ -287,8 +302,9 @@ app.get('/api/hourly-production-data', async (req, res) => {
         }
 
         let { startOfDay, endOfDay } = getISTDayBounds(queryDate);
-        startOfDay = new Date(startOfDay);
-        endOfDay = new Date(endOfDay);
+         
+       
+        console.log("hello",startOfDay,endOfDay);
 
         const query = {
             date: {
@@ -618,8 +634,8 @@ app.get('/api/pie', async (req, res) => {
         }
 
         let { startOfDay, endOfDay } = getISTDayBounds(latestRecord.date);
-        startOfDay = new Date(startOfDay);
-        endOfDay = new Date(endOfDay);
+
+       
 
 
         // Get all records for the latest date and shift
@@ -735,8 +751,8 @@ app.get('/api/hourly-production', async (req, res) => {
 
         const shift = latestRecord.shift;
         let { startOfDay, endOfDay } = getISTDayBounds(latestRecord.date);
-        startOfDay = new Date(startOfDay);
-        endOfDay = new Date(endOfDay);
+        
+        
 
         // Get all updates for this shift
         const allUpdates = await PartDetails.find({
