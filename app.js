@@ -45,7 +45,6 @@ function getISTDateTime(date = new Date()) {
 function getISTDayBounds(date) {
     // Convert input to Date if string
     const inputDate = new Date(date);
-    console.log(inputDate);
     
     // Create IST date by adding 5:30 hours offset
     const istDate = new Date(inputDate.getTime() + (5.5 * 60 * 60 * 1000));
@@ -65,9 +64,6 @@ function getISTDayBounds(date) {
         istDate.getDate(),
         18, 29, 59, 999  // 18:29:59.999 UTC = 23:59:59.999 IST
     ));
-
-    console.log("startOfDay (IST):", new Date(startOfDay.getTime() + (5.5 * 60 * 60 * 1000)));
-    console.log("endOfDay (IST):", new Date(endOfDay.getTime() + (5.5 * 60 * 60 * 1000)));
     
     return {
         startOfDay: new Date(startOfDay.getTime() + (5.5 * 60 * 60 * 1000)),
@@ -129,16 +125,13 @@ app.post('/spark/data', async (req, res) => {
         const today = getISTDateTime();
 
         const timeString = today.toISOString();
-        console.log(timeString);
         const time = timeString.slice(11, 16);
-        console.log(time);
         if(  (time >= '00:00' && time <= '07:00')){
             today.setDate(today.getDate() - 1);
         }
 
         let { startOfDay, endOfDay } = getISTDayBounds(today);
         
-        console.log(startOfDay,endOfDay);
 
         
         today.setUTCHours(0, 0, 0, 0);
@@ -156,7 +149,6 @@ app.post('/spark/data', async (req, res) => {
             }
         });
 
-        console.log(existingPart)
 
         let partDetails;
         if (existingPart) {
@@ -302,9 +294,6 @@ app.get('/api/hourly-production-data', async (req, res) => {
         }
 
         let { startOfDay, endOfDay } = getISTDayBounds(queryDate);
-         
-       
-        console.log("hello",startOfDay,endOfDay);
 
         const query = {
             date: {
