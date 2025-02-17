@@ -250,7 +250,7 @@ app.get('/api/hourly-production-data', async (req, res) => {
         // Get query date
         let queryDate;
         if (date) {
-            queryDate = moment(date).tz('Asia/Kolkata');
+            queryDate = moment(date, 'YYYY-MM-DD').tz('Asia/Kolkata');
         } else {
             // Get latest date from PartDetails
             const latestRecord = await PartDetails.findOne().sort({ date: -1 });
@@ -687,7 +687,7 @@ app.post('/api/quality-data', async (req, res) => {
         }
 
         // Format date
-        const queryDate = moment(date).tz('Asia/Kolkata').format('YYYY-MM-DD');
+        const queryDate = moment(date, 'YYYY-MM-DD').tz('Asia/Kolkata').format('YYYY-MM-DD');
 
         // Validate production exists
         const productionExists = await PartDetails.findOne({
@@ -741,7 +741,7 @@ app.post('/api/quality-data', async (req, res) => {
 async function calculateAndSaveOEE(shift, date) {
     try {
         // Get date range
-        const queryDate = moment(date).tz('Asia/Kolkata').format('YYYY-MM-DD');
+        const queryDate = moment(date, 'YYYY-MM-DD').tz('Asia/Kolkata').format('YYYY-MM-DD');
 
         // Get production data
         const productions = await PartDetails.find({
