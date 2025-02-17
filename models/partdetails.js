@@ -18,11 +18,7 @@ const partDetailsSchema = new mongoose.Schema({
         required: true
     },
     date: {
-        type: Date,
-        default: Date.now
-    },
-    lastUpdated: {
-        type: Date,
+        type: String,
         required: true
     }
 });

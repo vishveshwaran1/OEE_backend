@@ -13,6 +13,7 @@
     "cors": "^2.8.5",
     "cron": "^3.3.2",
     "express": "^4.21.2",
+    "moment-timezone": "^0.5.47",
     "mongoose": "^8.9.3",
     "node-cron": "^3.0.3",
     "nodemon": "^3.1.9"
