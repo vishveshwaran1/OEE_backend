@@ -220,14 +220,14 @@ app.post('/api/production', async (req, res) => {
         // Format response using moment for consistent date handling
         const responseData = {
             success: true,
-            data: {
-                partNumber: latestProduction.partNumber,
-                plan: latestProduction.target,
-                actual: latestProduction.count,
-                shift: latestProduction.shift,
-                date: latestProduction.date,
-                lastUpdated: moment(latestProduction.date).tz('Asia/Kolkata').format()
-            }
+
+            partNumber: latestProduction.partNumber,
+            plan: latestProduction.target,
+            actual: latestProduction.count,
+            shift: latestProduction.shift,
+            date: latestProduction.date,
+            //lastUpdated: moment(latestProduction.date).tz('Asia/Kolkata').format()
+            
         };
 
         res.status(200).json(responseData);
