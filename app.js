@@ -53,9 +53,9 @@ function getCurrentShiftAndDate() {
 app.post('/spark/data', async (req, res) => {
     try {
  console.log(req.body);
-        const partNumber = parseInt(req.body.partNumber);
-        const count = parseInt(req.body.count);
-        const target = parseInt(req.body.target);
+        const partNumber = (req.body.partNumber);
+        const count = (req.body.count);
+        const target = (req.body.target);
         
         console.log(partNumber, count, target);
 
