@@ -1,223 +1,99 @@
 const express = require('express');
 const cors = require('cors');
-const cron = require('node-cron');
+const moment = require('moment-timezone');
 const PartDetails = require('./models/partdetails');
+const HourlyProduction = require('./models/hourlyProduction');
 const Rejection = require('./models/rejection');
-const StopTime = require('./models/stoptime');
 const OEE = require('./models/oee');
-const HourlyProduction = require('./models/hourlyProduction'); 
-
-require('./connection');
+const StopTime = require('./models/stoptime');
+const Correction = require('./models/correction');
 
 const app = express();
-const port = process.env.PORT || 3001;
+
+const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({extended: true}));
+app.use(express.urlencoded({ extended: true }));
+
+// MongoDB Connection
+require('./connection');
 
 // Constants
 const IDEAL_CYCLE_TIME = 36; // seconds
 const PLANNED_PRODUCTION_TIME = (10 * 60) + 30; // 10 hours 30 minutes
 
-
-// Add this helper function at the top of app.js to convert to IST
-function getISTDateTime(date = new Date()) {
-    // Get the time offset between UTC and IST (IST is UTC+5:30)
-    const istOffset = 5.5 * 60 * 60 * 1000; // 5.5 hours in milliseconds
-    
-    // Get current time in UTC
-    const utc = date.getTime();
-    
-    // Create new date object for IST
-    const istDate = new Date(utc + istOffset);
-    
-    return istDate;
+// Time Helper Functions
+function getCurrentIST() {
+    return moment().tz('Asia/Kolkata');
 }
 
-// function getISTDateTime(date = new Date()) {
-//     const istDate = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-//     //console.log("istDate",istDate);
-//     return istDate;
-// }
+function getCurrentShiftAndDate() {
+    const currentIST = getCurrentIST();
+    const time = currentIST.format('HH:mm');
+    const date = currentIST.format('YYYY-MM-DD');
+    
+    let shift;
+    let shiftDate = date;
 
-// Helper function to get start and end of IST day
-function getISTDayBounds(date) {
-    // Convert input to Date if string
-    const inputDate = new Date(date);
-    console.log(inputDate);
-    
-    // Create IST date by adding 5:30 hours offset
-    const istDate = new Date(inputDate.getTime() + (5.5 * 60 * 60 * 1000));
-    console.log(istDate);
-    // Create start of day in IST (previous day 18:30 UTC)
-    const startOfDay = new Date(Date.UTC(
-        istDate.getFullYear(),
-        istDate.getMonth(),
-        istDate.getDate() - 1,
-        18, 30, 0, 0  // 18:30 UTC = 00:00 IST
-    ));
-    
-    // Create end of day in IST (next day 18:29:59.999 UTC)
-    const endOfDay = new Date(Date.UTC(
-        istDate.getFullYear(),
-        istDate.getMonth(),
-        istDate.getDate(),
-        18, 29, 59, 999  // 18:29:59.999 UTC = 23:59:59.999 IST
-    ));
-
-    console.log("startOfDay (IST):", new Date(startOfDay.getTime() + (5.5 * 60 * 60 * 1000)));
-    console.log("endOfDay (IST):", new Date(endOfDay.getTime() + (5.5 * 60 * 60 * 1000)));
-    
-    return {
-        startOfDay: new Date(startOfDay.getTime() + (5.5 * 60 * 60 * 1000)),
-        endOfDay: new Date(endOfDay.getTime() + (5.5 * 60 * 60 * 1000))
-    };
-}
-
-function getISTDayBoundsprev(date) {
-    // Convert input to Date if string
-    const inputDate = new Date(date);
-    console.log(inputDate);
-    
-    // Create IST date by adding 5:30 hours offset
-    const istDate = new Date(date);
-    console.log(istDate);
-    // Create start of day in IST (previous day 18:30 UTC)
-    const startOfDay = new Date(Date.UTC(
-        istDate.getFullYear(),
-        istDate.getMonth(),
-        istDate.getDate() - 1,
-        0, 0, 0, 0  // 18:30 UTC = 00:00 IST
-    ));
-    
-    // Create end of day in IST (next day 18:29:59.999 UTC)
-    const endOfDay = new Date(Date.UTC(
-        istDate.getFullYear(),
-        istDate.getMonth(),
-        istDate.getDate(),
-        23, 29, 59, 999  // 18:29:59.999 UTC = 23:59:59.999 IST
-    ));
-
-    console.log("startOfDay (IST):", new Date(startOfDay.getTime()));
-    console.log("endOfDay (IST):", new Date(endOfDay.getTime()));
-    
-    return {
-        startOfDay: new Date(startOfDay.getTime() + (5.5 * 60 * 60 * 1000)),
-        endOfDay: new Date(endOfDay.getTime() + (5.5 * 60 * 60 * 1000))
-    };
-}
-
-
-
-function getCurrentShift() {
-    const istDateTime = getISTDateTime();
-    
-    const timeString = istDateTime.toISOString();
-    const time = timeString.slice(11, 16);  // This will extract "HH:MM" from the ISO string
-   
-   
-    
-    // Convert times to comparable format (HH:mm)
-    const currentTime = time;
-    
-    // For shift-2, check if time is between 20:30 and 23:59 OR between 00:00 and 07:00
-    if (
-        (currentTime >= '20:30' && currentTime <= '23:59') || 
-        (currentTime >= '00:00' && currentTime <= '08:29')
-    ) {
-        return 'shift-2';
-    } 
-    // For shift-1, check if time is between 08:30 and 19:00
-    else if (currentTime >= '08:30' && currentTime <= '20:29') {
-        return 'shift-1';
+    if (time >= '08:30' && time <= '19:00') {
+        shift = 'shift-1';
+    } else if ((time >= '20:30' && time <= '23:59') || (time >= '00:00' && time <= '07:00')) {
+        shift = 'shift-2';
+        // Adjust date for early morning hours of shift-2
+        if (time >= '00:00' && time <= '07:00') {
+            shiftDate = moment(currentIST).subtract(1, 'days').format('YYYY-MM-DD');
+        }
+    } else {
+        shift = null;
     }
-    
-    return null;
+
+    return { shift, date: shiftDate, time };
 }
 
 app.post('/spark/data', async (req, res) => {
     try {
-        const partNumber = parseInt(req.body.partNumber);
-        const count = req.body.count; 
-        const target = req.body.target;
-        console.log(partNumber,count,target);
-        
-        // Validate part number
-        if (partNumber !== 9253010242 && partNumber !== 9253020232) {
+        const { partNumber, count, target } = req.body;
+
+        console.log(partNumber, count, target);
+
+        // Input validation
+        if (!partNumber || !count || !target) {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid part number'
+                message: 'Missing required fields'
             });
         }
 
-        const currentShift = getCurrentShift();
-        if (!currentShift) {
+        // Get current shift and date
+        const currentIST = getCurrentIST();
+        const { shift, date, time } = getCurrentShiftAndDate();
+        const currentHour = currentIST.format('HH:mm');
+
+
+        if (!shift) {
             return res.status(400).json({
                 success: false,
                 message: 'Production data can only be recorded during shift hours'
             });
         }
 
-
-        const today = getISTDateTime();
-
-        const timeString = today.toISOString();
-        console.log(timeString);
-        const time = timeString.slice(11, 16);
-        console.log(time);
-        if(  (time >= '00:00' && time <= '07:00')){
-            today.setDate(today.getDate() - 1);
-        }
-
-        let { startOfDay, endOfDay } = getISTDayBounds(today);
-        
-        console.log(startOfDay,endOfDay);
-
-        
-        today.setUTCHours(0, 0, 0, 0);
-
-        // Calculate target based on ideal cycle time
-        // const target = req.body.target; // Calculate theoretical max parts
-
-        // Find existing record for this part number in current shift
-        const existingPart = await PartDetails.findOne({
+        // Find existing record
+        let partDetails = await PartDetails.findOne({
             partNumber: partNumber.toString(),
-            shift: currentShift,
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            }
+            shift,
+            date
         });
 
-        console.log(existingPart)
-
-        let partDetails;
-        if (existingPart) {
-            
-            // // Validate count increase
-            // if (count <= existingPart.count) {
-            //     return res.status(400).json({
-            //         success: false,
-            //         message: 'New count must be greater than previous count'
-            //     });
-            // }
-
-            // Update existing record using findOneAndUpdate
+        if (partDetails) {
+            // Update existing record
             partDetails = await PartDetails.findOneAndUpdate(
                 {
                     partNumber: partNumber.toString(),
-                    shift: currentShift,
-                    date: {
-                        $gte: startOfDay,
-                        $lt: endOfDay
-                    }
+                    shift,
+                    date
                 },
-                { 
-                    count,
-                    target,
-                    lastUpdated: getISTDateTime()
-                },
+                { count, target },
                 { new: true }
             );
         } else {
@@ -226,83 +102,79 @@ app.post('/spark/data', async (req, res) => {
                 partNumber: partNumber.toString(),
                 count,
                 target,
-                shift: currentShift,
-                date:  getISTDateTime(),    
-                lastUpdated: getISTDateTime()
+                shift,
+                date
             });
             await partDetails.save();
         }
 
-        // Add hourly production tracking
-        const currentHour = getISTDateTime().toLocaleTimeString('en-US', { 
-            hour12: false, 
-            hour: '2-digit',
-            minute: '2-digit',
-            timeZone: 'Asia/Kolkata'
-        }).slice(0, 5);
+        //console.log(partNumber,shift,date);
 
-        // Find the last hourly production record for this part and shift
+        // Handle HourlyProduction
         const lastHourlyRecord = await HourlyProduction.findOne({
             partNumber: partNumber.toString(),
-            shift: currentShift,
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            }
+            shift,
+            date
         }).sort({ hour: -1 });
 
-        // Calculate the hourly count
-        let hourlyCount;
-        if (lastHourlyRecord) {
-            // If there's a previous record in the same shift
-            if (lastHourlyRecord.hour === currentHour) {
-                // If it's the same hour, the count is the difference from the last total
-                hourlyCount = count - lastHourlyRecord.cumulativeCount;
-                // Update existing record
-                await HourlyProduction.findOneAndUpdate(
-                    {
-                        _id: lastHourlyRecord._id
-                    },
-                    {
-                        count: lastHourlyRecord.count + hourlyCount,
-                        cumulativeCount: count
-                    }
-                );
-            } else {
-                // New hour, create new record
-                hourlyCount = count - lastHourlyRecord.cumulativeCount;
-                const newHourlyProduction = new HourlyProduction({
-                    partNumber: partNumber.toString(),
-                    shift: currentShift,
-                    date: getISTDateTime(),
-                    hour: time,
+        let hourlyRecord;
+        //console.log(lastHourlyRecord.hour.split(":")[0],currentHour.split(":")[0]);
+        
+        if (!lastHourlyRecord) {
+            console.log("first entry for the shift");
+            // First entry for this shift
+            hourlyRecord = new HourlyProduction({
+                partNumber: partNumber.toString(),
+                shift,
+                date,
+                hour: currentHour,
+                count: count, // First hour count
+                cumulativeCount: count // Same as count for first entry
+            });
+        } else if (lastHourlyRecord.hour.split(":")[0] === currentHour.split(":")[0]) {
+            console.log("record update for the same hour");
+            // Update existing hour's record
+            const hourlyCount = count - (lastHourlyRecord.cumulativeCount - lastHourlyRecord.count);
+            hourlyRecord = await HourlyProduction.findByIdAndUpdate(
+                lastHourlyRecord._id,
+                {
                     count: hourlyCount,
                     cumulativeCount: count
-                });
-                await newHourlyProduction.save();
-            }
+                },
+                { new: true }
+            );
         } else {
-            // First record of the shift
-            hourlyCount = count;
-            const newHourlyProduction = new HourlyProduction({
+            console.log("new hour within the same shift");
+            // New hour within same shift
+            const hourlyCount = count - lastHourlyRecord.cumulativeCount;
+            hourlyRecord = new HourlyProduction({
                 partNumber: partNumber.toString(),
-                shift: currentShift,
-                date: getISTDateTime(),
-                hour: time,
+                shift,
+                date,
+                hour: currentHour,
                 count: hourlyCount,
                 cumulativeCount: count
             });
-            await newHourlyProduction.save();
         }
+
+        await hourlyRecord.save();
+
         res.status(200).json({
             success: true,
-            message: existingPart ? 'Part count updated successfully' : 'New part record created',
+            message: 'Production data updated successfully',
             data: {
-                partNumber: partDetails.partNumber,
-                currentCount: partDetails.count,
-                target: partDetails.target,
-                shift: partDetails.shift,
-                lastUpdated: partDetails.lastUpdated
+                partDetails: {
+                    partNumber: partDetails.partNumber,
+                    currentCount: partDetails.count,
+                    target: partDetails.target,
+                    shift: partDetails.shift,
+                    date: partDetails.date
+                },
+                hourlyData: {
+                    hour: hourlyRecord.hour,
+                    count: hourlyRecord.count,
+                    cumulativeCount: hourlyRecord.cumulativeCount
+                }
             }
         });
 
@@ -315,16 +187,74 @@ app.post('/spark/data', async (req, res) => {
     }
 });
 
-// New endpoint to get hourly production data
+app.post('/api/production', async (req, res) => {
+    try {
+        let { partNumber } = req.body;
+        
+        // Input validation
+        if (!partNumber) {
+            return res.status(400).json({
+                success: false,
+                message: 'Part number is required'
+            });
+        }
+
+        // Format part number as string for consistency
+        const partNumberStr = partNumber.toString();
+
+        // Get the latest record with proper date sorting
+        const latestProduction = await PartDetails.findOne({ 
+            partNumber: partNumberStr 
+        })
+        .sort({ 
+            date: -1,  // Sort by date first
+            shift: -1  // Then by shift
+        })
+        .limit(1);
+
+        if (!latestProduction) {
+            return res.status(404).json({
+                success: false,
+                message: 'No production data found for this part number'
+            });
+        }
+
+        // Format response using moment for consistent date handling
+        const responseData = {
+            success: true,
+
+            partNumber: latestProduction.partNumber,
+            plan: latestProduction.target,
+            actual: latestProduction.count,
+            shift: latestProduction.shift,
+            date: latestProduction.date,
+            //lastUpdated: moment(latestProduction.date).tz('Asia/Kolkata').format()
+            
+        };
+
+        res.status(200).json(responseData);
+
+    } catch (error) {
+        console.error('Error in /api/production:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching production data',
+            error: error.message
+        });
+    }
+});
+
+// Add to index.js after /api/production endpoint
 app.get('/api/hourly-production-data', async (req, res) => {
     try {
         const { date, shift } = req.query;
         
+        // Get query date
         let queryDate;
         if (date) {
-            queryDate = new Date(date);
+            queryDate = moment(date).tz('Asia/Kolkata');
         } else {
-            // Get the latest date from PartDetails if no date provided
+            // Get latest date from PartDetails
             const latestRecord = await PartDetails.findOne().sort({ date: -1 });
             if (!latestRecord) {
                 return res.status(404).json({
@@ -332,28 +262,34 @@ app.get('/api/hourly-production-data', async (req, res) => {
                     message: 'No production data found'
                 });
             }
-            queryDate = latestRecord.date;
+            queryDate = moment(latestRecord.date).tz('Asia/Kolkata');
         }
 
-        let { startOfDay, endOfDay } = getISTDayBounds(queryDate);
-         
-       
-        console.log("hello",startOfDay,endOfDay);
+        // Format date as YYYY-MM-DD for query
+        const formattedDate = queryDate.format('YYYY-MM-DD');
 
+        // Build query
         const query = {
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            }
+            date: formattedDate
         };
 
         if (shift) {
             query.shift = shift;
+            
+            // Adjust date for shift-2 early morning hours
+            if (shift === 'shift-2') {
+                const currentHour = queryDate.format('HH');
+                if (currentHour >= '00' && currentHour <= '07') {
+                    query.date = queryDate.subtract(1, 'days').format('YYYY-MM-DD');
+                }
+            }
         }
 
+        // Get hourly production data
         const hourlyData = await HourlyProduction.find(query)
             .sort({ hour: 1 });
 
+        // Format response data
         const formattedData = {
             'BIG CYLINDER': {},
             'SMALL CYLINDER': {}
@@ -364,14 +300,18 @@ app.get('/api/hourly-production-data', async (req, res) => {
             formattedData[partName][record.hour] = record.count;
         });
 
-        res.status(200).json({
+        // Prepare response
+        const responseData = {
             success: true,
-            date: getISTDateTime(queryDate).toISOString(),
+            date: queryDate.format('YYYY-MM-DD'),
             shift: shift || 'all',
             hourlyProduction: formattedData
-        });
+        };
+
+        res.status(200).json(responseData);
 
     } catch (error) {
+        console.error('Error in /api/hourly-production-data:', error);
         res.status(500).json({
             success: false,
             message: 'Error fetching hourly production data',
@@ -380,285 +320,16 @@ app.get('/api/hourly-production-data', async (req, res) => {
     }
 });
 
-// API to submit rejections and stop times
-app.post('/api/quality-data', async (req, res) => {
-    try {
-        const { rejections, stopTimes, shift, date } = req.body;
-
-
-        const shiftDate = getISTDateTime(new Date(date));
-        //let { startOfDay, endOfDay } = getISTDayBounds(shiftDate);
-        
-        // Convert incoming date to UTC
-        const inputDate = new Date(date);
-
-        // Create UTC day bounds
-        const startOfDay = new Date(Date.UTC(
-            inputDate.getUTCFullYear(),
-            inputDate.getUTCMonth(),
-            inputDate.getUTCDate(),
-            0, 0, 0, 0
-        ));
-
-        const endOfDay = new Date(Date.UTC(
-            inputDate.getUTCFullYear(),
-            inputDate.getUTCMonth(),
-            inputDate.getUTCDate(),
-            23, 59, 59, 999
-        ));
-
-
-        if (!shift || !date || !rejections || !stopTimes) {
-            return res.status(400).json({
-                success: false,
-                message: 'Missing required fields: shift, date, rejections, stopTimes'
-            });
-        }
-
-
-        // Validate if provided shift and date have production data
-        const productionExists = await PartDetails.findOne({
-            shift,
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            }
-        });
-
-
-        if (!productionExists) {
-            return res.status(404).json({
-                success: false,
-                message: 'No production data found for the specified shift and date'
-            });
-        }
-        
-        // Check if data already exists for this shift and day
-        const existingRejections = await Rejection.find({
-            shift,
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            }
-        });
-
-        const existingStopTimes = await StopTime.find({
-            shift,
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            }
-        });
-
-        // Delete existing records if any
-        if (existingRejections.length > 0) {
-            await Rejection.deleteMany({
-                shift,
-                date: {
-                    $gte: startOfDay,
-                    $lt: endOfDay
-                }
-            });
-        }
-
-        if (existingStopTimes.length > 0) {
-            await StopTime.deleteMany({
-                shift,
-                date: {
-                    $gte: startOfDay,
-                    $lt: endOfDay
-                }
-            });
-        }
-
-        // Save new rejections
-        await Promise.all(rejections.map(rejection => 
-            new Rejection({
-                ...rejection,
-                shift,
-                date: new Date(date)
-            }).save()
-        ));
-
-        // Save new stop times
-        await Promise.all(stopTimes.map(stopTime => 
-            new StopTime({
-                ...stopTime,
-                shift,
-                date: new Date(date)
-            }).save()
-        ));
-
-        // Calculate and save OEE
-        await calculateAndSaveOEE(shift, date);
-
-        res.status(200).json({
-            success: true,
-            message: 'Quality data updated and OEE calculated successfully',
-            shift,
-            date: shiftDate
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error processing quality data',
-            error: error.message
-        });
-    }
-});
-
-async function calculateAndSaveOEE(shift, date) {
-    try {
-        // Set date to start of day
-        const shiftDate = getISTDateTime(new Date(date));
-        const inputDate = new Date(date);
-
-        // Create UTC day bounds
-        const startOfDay = new Date(Date.UTC(
-            inputDate.getUTCFullYear(),
-            inputDate.getUTCMonth(),
-            inputDate.getUTCDate(),
-            0, 0, 0, 0
-        ));
-
-        const endOfDay = new Date(Date.UTC(
-            inputDate.getUTCFullYear(),
-            inputDate.getUTCMonth(),
-            inputDate.getUTCDate(),
-            23, 59, 59, 999
-        ));
-
-
-
-        // Get total production count
-        const productions = await PartDetails.find({
-            shift,
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            }
-        });
-
-
-        const totalCount = productions.reduce((sum, prod) => sum + prod.count, 0);
-        
-        // Validate totalCount
-        if (totalCount === 0) {
-            throw new Error('Total count cannot be zero');
-        }
-
-        // Get total stop time
-        const stopTimes = await StopTime.find({
-            shift,
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            }
-        });
-
-        const totalStopTime = stopTimes.reduce((sum, stop) => sum + stop.duration, 0);
-
-        // Get total rejections
-        const rejections = await Rejection.find({
-            shift,
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            }
-        });
-
-        const totalRejections = rejections.reduce((sum, rej) => sum + rej.count, 0);
-
-        // Calculate OEE components with validation
-        const runTime = PLANNED_PRODUCTION_TIME - totalStopTime;
-
-        
-        // Validate runTime
-        if (runTime <= 0) {
-            throw new Error('Run time must be greater than 0');
-        }
-
-        const goodCount = totalCount - totalRejections;
-
-        const availability = runTime / PLANNED_PRODUCTION_TIME;
-        const performance = (IDEAL_CYCLE_TIME * totalCount) / (runTime * 60); // convert runtime to seconds
-        const quality = goodCount / totalCount;
-        
-        // Validate all components
-        if (isNaN(availability) || isNaN(performance) || isNaN(quality)) {
-            throw new Error('Invalid calculation: One or more OEE components is NaN');
-        }
-
-        const oee = availability * performance * quality;
-
-        // Final validation
-        if (isNaN(oee)) {
-            throw new Error('OEE calculation resulted in NaN');
-        }
-
-        // Save or update OEE record
-        await OEE.findOneAndUpdate(
-            { shift, date: shiftDate },
-            {
-                availability,
-                performance,
-                quality,
-                oee,
-                totalCount,
-                goodCount,
-                runTime
-            },
-            { upsert: true, new: true }
-        );
-    } catch (error) {
-        throw new Error(`OEE Calculation Error: ${error.message}`);
-    }
-}
-
-// API to get latest OEE
-app.get('/api/oee', async (req, res) => {
-    try {
-        const latestOEE = await OEE.findOne()
-            .sort({ date: -1, shift: -1 })
-            .limit(1);
-
-        if (!latestOEE) {
-            return res.status(404).json({
-                success: false,
-                message: 'No OEE data found'
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            data: {
-                availability: (latestOEE.availability * 100).toFixed(2) + '%',
-                performance: (latestOEE.performance * 100).toFixed(2) + '%',
-                quality: (latestOEE.quality * 100).toFixed(2) + '%',
-                oee: (latestOEE.oee * 100).toFixed(2) + '%',
-                totalCount: latestOEE.totalCount,
-                goodCount: latestOEE.goodCount,
-                runTime: latestOEE.runTime
-            }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching OEE data',
-            error: error.message
-        });
-    }
-});
-
+// Add after the hourly-production-data endpoint
 app.get('/api/pie', async (req, res) => {
     try {
-        // Find the latest date from all records
+        // Find the latest date and shift
         const latestRecord = await PartDetails.findOne()
-            .sort({ date: -1, shift: -1 })
+            .sort({ 
+                date: -1,
+                shift: -1 
+            })
             .limit(1);
-
-        console.log(latestRecord);
-        
 
         if (!latestRecord) {
             return res.status(404).json({ 
@@ -667,22 +338,21 @@ app.get('/api/pie', async (req, res) => {
             });
         }
 
-        let { startOfDay, endOfDay } = getISTDayBoundsprev(latestRecord.date);
-
-       
-
+        // Get the date in YYYY-MM-DD format
+        const queryDate = latestRecord.date;
+        const queryShift = latestRecord.shift;
 
         // Get all records for the latest date and shift
         const records = await PartDetails.find({
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            },
-            shift: latestRecord.shift
+            date: queryDate,
+            shift: queryShift
         });
 
-        const result = {};
-        //console.log(records);
+        // Format the response data
+        const result = {
+            'BIG CYLINDER': 0,
+            'SMALL CYLINDER': 0
+        };
 
         records.forEach(record => {
             if (record.partNumber === '9253020232') {
@@ -692,9 +362,18 @@ app.get('/api/pie', async (req, res) => {
             }
         });
 
+        // Add metadata to response
+        // const responseData = {
+        //     success: true,
+        //     date: queryDate,
+        //     shift: queryShift,
+        //     data: result
+        // };
+
         res.status(200).json(result);
 
     } catch (error) {
+        console.error('Error in /api/pie:', error);
         res.status(500).json({
             success: false,
             message: 'Error fetching pie data',
@@ -703,180 +382,14 @@ app.get('/api/pie', async (req, res) => {
     }
 });
 
-app.post('/api/production', async (req, res) => {
-    try {
-        let { partNumber } = req.body;
-        partNumber = parseInt(partNumber);
 
-        // Find the latest record for the given part number using IST date
-        const latestProduction = await PartDetails.findOne({ partNumber })
-            .sort({ 
-                date: -1, 
-                shift: -1 
-            })
-            .limit(1);
-
-        if (!latestProduction) {
-            return res.status(404).json({
-                success: false,
-                message: 'No production data found for this part number'
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            plan: latestProduction.target,
-            actual: latestProduction.count,
-            lastUpdated: getISTDateTime(latestProduction.lastUpdated).toISOString()
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching production data',
-            error: error.message
-        });
-    }
-})
-
-app.get('/api/oee-history', async (req, res) => {
-    try {
-        // Include shift in projection
-        const oeeHistory = await OEE.find({}, 'date shift oee')
-            .sort({ date: -1, shift: -1 });
-
-        if (!oeeHistory || oeeHistory.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'No OEE history found'
-            });
-        }
-
-        // Format response to include shift
-        const formattedHistory = oeeHistory.map(record => ({
-            date: getISTDateTime(record.date).toISOString(),
-            shift: record.shift,
-            oee: (record.oee * 100).toFixed(2)
-        }));
-
-        res.status(200).json(formattedHistory);
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching OEE history',
-            error: error.message
-        });
-    }
-});
-
-app.get('/api/hourly-production', async (req, res) => {
-    try {
-        // Get the latest part details record to get shift and date
-        const latestRecord = await PartDetails.findOne()
-            .sort({ date: -1, shift: -1 })
-            .limit(1);
-
-        if (!latestRecord) {
-            return res.status(404).json({
-                success: false,
-                message: 'No production data found'
-            });
-        }
-
-        const shift = latestRecord.shift;
-        let { startOfDay, endOfDay } = getISTDayBounds(latestRecord.date);
-        
-        
-
-        // Get all updates for this shift
-        const allUpdates = await PartDetails.find({
-            shift,
-            date: {
-                $gte: startOfDay,
-                $lt: endOfDay
-            }
-        }).sort({ lastUpdated: 1 }); // Sort by update time
-
-        // Define shift hours
-        const shiftHours = shift === 'shift-1' 
-            ? ['08:30', '09:30', '10:30', '11:30', '12:30', '13:30', '14:30', '15:30', '16:30', '17:30', '18:30'] 
-            : ['20:30', '21:30', '22:30', '23:30', '00:30', '01:30', '02:30', '03:30', '04:30', '05:30', '06:30'];
-
-        // Initialize hourly counts
-        const hourlyProduction = {
-            'BIG CYLINDER': {},
-            'SMALL CYLINDER': {}
-        };
-
-        shiftHours.forEach((hour, index) => {
-            const nextHour = shiftHours[index + 1] || (shift === 'shift-1' ? '19:00' : '07:00');
-            
-            // Filter updates within this hour
-            const updatesInHour = allUpdates.filter(update => {
-                const updateTime = getISTDateTime(update.lastUpdated)
-                    .toLocaleTimeString('en-US', { 
-                        hour12: false, 
-                        hour: '2-digit', 
-                        minute: '2-digit'
-                    });
-                return updateTime >= hour && updateTime < nextHour;
-            });
-
-            // Get last count for each part in this hour
-            const bigCylinder = updatesInHour
-                .filter(u => u.partNumber === '9253010242')
-                .pop();
-            const smallCylinder = updatesInHour
-                .filter(u => u.partNumber === '9253020232')
-                .pop();
-
-            hourlyProduction['BIG CYLINDER'][hour] = bigCylinder ? bigCylinder.count : 0;
-            hourlyProduction['SMALL CYLINDER'][hour] = smallCylinder ? smallCylinder.count : 0;
-        });
-
-        // Calculate differences to get actual hourly production
-        const hourlyOutput = {
-            'BIG CYLINDER': {},
-            'SMALL CYLINDER': {}
-        };
-
-        Object.keys(hourlyProduction).forEach(part => {
-            const hours = Object.keys(hourlyProduction[part]);
-            hours.forEach((hour, index) => {
-                const currentCount = hourlyProduction[part][hour];
-                const previousCount = index > 0 ? hourlyProduction[part][hours[index - 1]] : 0;
-                hourlyOutput[part][hour] = currentCount - previousCount;
-            });
-        });
-
-        res.status(200).json({
-            success: true,
-            shift: shift,
-            date: getISTDateTime(latestRecord.date).toISOString(),
-            hourlyProduction: hourlyOutput
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching hourly production data',
-            error: error.message
-        });
-    }
-});
-
-
+// Monthly Stats API
 app.get('/api/monthly-stats', async (req, res) => {
     try {
-        // Get current month's date range
-        const today = new Date();
-        const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-        const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-
-        // Set time to start and end of days
-        startOfMonth.setUTCHours(0, 0, 0, 0);
-        endOfMonth.setUTCHours(23, 59, 59, 999);
+        // Get current month's date range in IST
+        const now = moment().tz('Asia/Kolkata');
+        const startOfMonth = moment(now).startOf('month').format('YYYY-MM-DD');
+        const endOfMonth = moment(now).endOf('month').format('YYYY-MM-DD');
 
         // Get total production from PartDetails
         const productionData = await PartDetails.aggregate([
@@ -923,8 +436,8 @@ app.get('/api/monthly-stats', async (req, res) => {
         // Format the response
         const monthlyStats = {
             period: {
-                start: startOfMonth.toISOString(),
-                end: endOfMonth.toISOString()
+                start: startOfMonth,
+                end: endOfMonth
             },
             stats: {
                 'BIG CYLINDER': {
@@ -959,12 +472,20 @@ app.get('/api/monthly-stats', async (req, res) => {
                 monthlyStats.stats[partName].totalProduction - rej.totalRejections;
         });
 
+        // Set goodCount equal to totalProduction if no rejections
+        Object.keys(monthlyStats.stats).forEach(partName => {
+            if (!monthlyStats.stats[partName].goodCount) {
+                monthlyStats.stats[partName].goodCount = monthlyStats.stats[partName].totalProduction;
+            }
+        });
+
         res.status(200).json({
             success: true,
             data: monthlyStats
         });
 
     } catch (error) {
+        console.error('Error in /api/monthly-stats:', error);
         res.status(500).json({
             success: false,
             message: 'Error fetching monthly statistics',
@@ -973,14 +494,13 @@ app.get('/api/monthly-stats', async (req, res) => {
     }
 });
 
+// Monthly Runtime API
 app.get('/api/monthly-runtime', async (req, res) => {
     try {
-        const today = new Date();
-        const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-        const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-
-        startOfMonth.setUTCHours(0, 0, 0, 0);
-        endOfMonth.setUTCHours(23, 59, 59, 999);
+        // Get current month's date range in IST
+        const now = moment().tz('Asia/Kolkata');
+        const startOfMonth = moment(now).startOf('month').format('YYYY-MM-DD');
+        const endOfMonth = moment(now).endOf('month').format('YYYY-MM-DD');
 
         // Get runtime from OEE records
         const oeeData = await OEE.aggregate([
@@ -996,12 +516,14 @@ app.get('/api/monthly-runtime', async (req, res) => {
                 $group: {
                     _id: null,
                     totalRunTime: { $sum: "$runTime" },
-                    totalPlannedTime: { $sum: PLANNED_PRODUCTION_TIME }
+                    totalPlannedTime: { 
+                        $sum: { $multiply: [PLANNED_PRODUCTION_TIME, 1] }
+                    }
                 }
             }
         ]);
 
-        // Get stoppage breakdown with renamed fields
+        // Get stoppage breakdown
         const stoppageData = await StopTime.aggregate([
             {
                 $match: {
@@ -1025,21 +547,34 @@ app.get('/api/monthly-runtime', async (req, res) => {
                     occurrences: 1,
                     _id: 0
                 }
+            },
+            {
+                $sort: { duration: -1 }
             }
         ]);
 
         const totalStopTime = stoppageData.reduce((sum, stop) => sum + stop.duration, 0);
+        const totalPlannedTime = oeeData[0]?.totalPlannedTime || 0;
+        const actualRunTime = oeeData[0]?.totalRunTime || 0;
 
         const runtimeStats = {
             period: {
-                start: startOfMonth.toISOString(),
-                end: endOfMonth.toISOString()
+                start: startOfMonth,
+                end: endOfMonth
             },
             stats: {
-                totalPlannedTime: oeeData[0]?.totalPlannedTime || 0,
-                totalStopTime: totalStopTime,
-                actualRunTime: oeeData[0]?.totalRunTime || 0,
-                stoppagesByReason: stoppageData
+                totalPlannedTime,
+                totalStopTime,
+                actualRunTime,
+                utilizationRate: totalPlannedTime ? 
+                    ((actualRunTime / totalPlannedTime) * 100).toFixed(2) + '%' : 
+                    '0%',
+                stoppagesByReason: stoppageData.map(stop => ({
+                    ...stop,
+                    percentage: totalStopTime ? 
+                        ((stop.duration / totalStopTime) * 100).toFixed(2) + '%' : 
+                        '0%'
+                }))
             }
         };
 
@@ -1049,6 +584,7 @@ app.get('/api/monthly-runtime', async (req, res) => {
         });
 
     } catch (error) {
+        console.error('Error in /api/monthly-runtime:', error);
         res.status(500).json({
             success: false,
             message: 'Error fetching monthly runtime statistics',
@@ -1056,7 +592,411 @@ app.get('/api/monthly-runtime', async (req, res) => {
         });
     }
 });
+app.get('/api/oee', async (req, res) => {
+    try {
+        // Get latest OEE record with proper date sorting
+        const latestOEE = await OEE.findOne()
+            .sort({ 
+                date: -1,
+                shift: -1 
+            })
+            .limit(1);
 
-app.listen(port,()=>{
+        if (!latestOEE) {
+            return res.status(404).json({
+                success: false,
+                message: 'No OEE data found'
+            });
+        }
+
+        // Format percentages with proper validation
+        const formatPercentage = (value) => {
+            if (isNaN(value) || value === null) return '0%';
+            return (value * 100).toFixed(2) + '%';
+        };
+
+        res.status(200).json({
+            success: true,
+            data: {
+                availability: formatPercentage(latestOEE.availability),
+                performance: formatPercentage(latestOEE.performance),
+                quality: formatPercentage(latestOEE.quality),
+                oee: formatPercentage(latestOEE.oee),
+                totalCount: latestOEE.totalCount || 0,
+                goodCount: latestOEE.goodCount || 0,
+                runTime: latestOEE.runTime || 0,
+                date: moment(latestOEE.date).tz('Asia/Kolkata').format('YYYY-MM-DD'),
+                shift: latestOEE.shift
+            }
+        });
+
+    } catch (error) {
+        console.error('Error in /api/oee:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching OEE data',
+            error: error.message
+        });
+    }
+});
+
+app.get('/api/oee-history', async (req, res) => {
+    try {
+        // Get OEE history with date and shift, sorted by latest first
+        const oeeHistory = await OEE.find({}, 'date shift oee')
+            .sort({ 
+                date: -1,
+                shift: -1 
+            });
+
+        if (!oeeHistory || oeeHistory.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'No OEE history found'
+            });
+        }
+
+        // Format response with proper IST dates and OEE percentage
+        const formattedHistory = oeeHistory.map(record => ({
+            date: moment(record.date).tz('Asia/Kolkata').format('YYYY-MM-DD'),
+            shift: record.shift,
+            oee: (record.oee * 100).toFixed(2)
+        }));
+
+        // Preserve original response format
+        res.status(200).json(formattedHistory);
+
+    } catch (error) {
+        console.error('Error in /api/oee-history:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching OEE history',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/quality-data', async (req, res) => {
+    try {
+        const { rejections, stopTimes, shift, date } = req.body;
+
+        // Validate required inputs
+        if (!shift || !date || !stopTimes) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields: shift, date, stopTimes'
+            });
+        }
+
+        // Format date
+        const queryDate = moment(date, 'YYYY-MM-DD').tz('Asia/Kolkata').format('YYYY-MM-DD');
+
+        // Validate production exists
+        const productionExists = await PartDetails.findOne({
+            shift,
+            date: queryDate
+        });
+
+        if (!productionExists) {
+            return res.status(404).json({
+                success: false,
+                message: 'No production data found for the specified shift and date'
+            });
+        }
+
+        // Delete existing records
+        await Promise.all([
+            StopTime.deleteMany({ shift, date: queryDate }),
+            // Only delete rejections if new rejection data is provided
+            ...(rejections && rejections.length > 0 ? 
+                [Rejection.deleteMany({ shift, date: queryDate })] : 
+                [])
+        ]);
+
+        // Save new records
+        const saveOperations = [
+            ...stopTimes.map(stopTime => 
+                new StopTime({ ...stopTime, shift, date: queryDate }).save()
+            )
+        ];
+
+        // Only save rejections if valid data is provided
+        if (rejections && rejections.length > 0 && 
+            rejections.some(r => r.partNumber && r.count && r.reason)) {
+            const validRejections = rejections.filter(r => 
+                r.partNumber && r.count && r.reason
+            );
+            saveOperations.push(
+                ...validRejections.map(rejection => 
+                    new Rejection({ ...rejection, shift, date: queryDate }).save()
+                )
+            );
+        }
+
+        await Promise.all(saveOperations);
+
+        // Calculate and save OEE
+        await calculateAndSaveOEE(shift, queryDate);
+
+        res.status(200).json({
+            success: true,
+            message: 'Quality data updated and OEE calculated successfully',
+            shift,
+            date: queryDate,
+            details: {
+                stoppagesProcessed: stopTimes.length,
+                rejectionsProcessed: rejections && rejections.length > 0 ? 
+                    rejections.filter(r => r.partNumber && r.count && r.reason).length : 
+                    'No rejections provided'
+            }
+        });
+
+    } catch (error) {
+        console.error('Error in /api/quality-data:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error processing quality data',
+            error: error.message
+        });
+    }
+});
+async function calculateAndSaveOEE(shift, date) {
+    try {
+        // Get date range
+        const queryDate = moment(date).tz('Asia/Kolkata').format('YYYY-MM-DD');
+
+        // Get production data
+        const productions = await PartDetails.find({
+            shift,
+            date: queryDate
+        });
+
+        const totalCount = productions.reduce((sum, prod) => sum + prod.count, 0);
+        if (totalCount === 0) throw new Error('Total count cannot be zero');
+
+        // Get stoppage data
+        const stopTimes = await StopTime.find({
+            shift,
+            date: queryDate
+        });
+
+        const totalStopTime = stopTimes.reduce((sum, stop) => sum + stop.duration, 0);
+
+        // Get rejection data - now optional
+        const rejections = await Rejection.find({
+            shift,
+            date: queryDate
+        });
+
+        // If no rejections found, assume all products are good
+        const totalRejections = rejections.length > 0 ? 
+            rejections.reduce((sum, rej) => sum + rej.count, 0) : 0;
+
+        // Calculate OEE components
+        const runTime = PLANNED_PRODUCTION_TIME - totalStopTime;
+        if (runTime <= 0) throw new Error('Run time must be greater than 0');
+
+        const goodCount = totalCount - totalRejections;
+        const availability = runTime / PLANNED_PRODUCTION_TIME;
+        const performance = (IDEAL_CYCLE_TIME * totalCount) / (runTime * 60);
+        // If no rejections, quality is 100%
+        const quality = rejections.length > 0 ? (goodCount / totalCount) : 1;
+        const oee = availability * performance * quality;
+
+        // Validate calculations
+        if ([availability, performance, quality, oee].some(val => isNaN(val))) {
+            throw new Error('Invalid OEE calculation values');
+        }
+
+        // Save OEE record
+        return await OEE.findOneAndUpdate(
+            { shift, date: queryDate },
+            {
+                availability,
+                performance,
+                quality,
+                oee,
+                totalCount,
+                goodCount,
+                runTime
+            },
+            { upsert: true, new: true }
+        );
+    } catch (error) {
+        throw new Error(`OEE Calculation Error: ${error.message}`);
+    }
+}
+
+// app.post('/api/quality-data', async (req, res) => {
+//     try {
+//         const { rejections, stopTimes, shift, date } = req.body;
+//         console.log(req.body);
+
+//         // Validate inputs
+//         if (!shift || !date || !rejections || !stopTimes) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: 'Missing required fields: shift, date, rejections, stopTimes'
+//             });
+//         }
+
+//         // Format date
+//         const queryDate = moment(date).tz('Asia/Kolkata').format('YYYY-MM-DD');
+
+//         // Validate production exists
+//         const productionExists = await PartDetails.findOne({
+//             shift,
+//             date: queryDate
+//         });
+
+//         if (!productionExists) {
+//             return res.status(404).json({
+//                 success: false,
+//                 message: 'No production data found for the specified shift and date'
+//             });
+//         }
+
+//         // Delete existing records
+//         await Promise.all([
+//             Rejection.deleteMany({ shift, date: queryDate }),
+//             StopTime.deleteMany({ shift, date: queryDate })
+//         ]);
+
+//         // Save new records
+//         await Promise.all([
+//             ...rejections.map(rejection => 
+//                 new Rejection({ ...rejection, shift, date: queryDate }).save()
+//             ),
+//             ...stopTimes.map(stopTime => 
+//                 new StopTime({ ...stopTime, shift, date: queryDate }).save()
+//             )
+//         ]);
+
+//         // Calculate and save OEE
+//         await calculateAndSaveOEE(shift, queryDate);
+
+//         res.status(200).json({
+//             success: true,
+//             message: 'Quality data updated and OEE calculated successfully',
+//             shift,
+//             date: queryDate
+//         });
+
+//     } catch (error) {
+//         console.error('Error in /api/quality-data:', error);
+//         res.status(500).json({
+//             success: false,
+//             message: 'Error processing quality data',
+//             error: error.message
+//         });
+//     }
+// });
+
+// async function calculateAndSaveOEE(shift, date) {
+//     try {
+//         // Get date range
+//         const queryDate = moment(date).tz('Asia/Kolkata').format('YYYY-MM-DD');
+
+//         // Get production data
+//         const productions = await PartDetails.find({
+//             shift,
+//             date: queryDate
+//         });
+
+//         const totalCount = productions.reduce((sum, prod) => sum + prod.count, 0);
+//         if (totalCount === 0) throw new Error('Total count cannot be zero');
+
+//         // Get stoppage data
+//         const stopTimes = await StopTime.find({
+//             shift,
+//             date: queryDate
+//         });
+
+//         const totalStopTime = stopTimes.reduce((sum, stop) => sum + stop.duration, 0);
+
+//         // Get rejection data
+//         const rejections = await Rejection.find({
+//             shift,
+//             date: queryDate
+//         });
+
+//         const totalRejections = rejections.reduce((sum, rej) => sum + rej.count, 0);
+
+//         // Calculate OEE components
+//         const runTime = PLANNED_PRODUCTION_TIME - totalStopTime;
+//         if (runTime <= 0) throw new Error('Run time must be greater than 0');
+
+//         const goodCount = totalCount - totalRejections;
+//         const availability = runTime / PLANNED_PRODUCTION_TIME;
+//         const performance = (IDEAL_CYCLE_TIME * totalCount) / (runTime * 60);
+//         const quality = goodCount / totalCount;
+//         const oee = availability * performance * quality;
+
+//         // Validate calculations
+//         if ([availability, performance, quality, oee].some(val => isNaN(val))) {
+//             throw new Error('Invalid OEE calculation values');
+//         }
+
+//         // Save OEE record
+//         return await OEE.findOneAndUpdate(
+//             { shift, date: queryDate },
+//             {
+//                 availability,
+//                 performance,
+//                 quality,
+//                 oee,
+//                 totalCount,
+//                 goodCount,
+//                 runTime
+//             },
+//             { upsert: true, new: true }
+//         );
+//     } catch (error) {
+//         throw new Error(`OEE Calculation Error: ${error.message}`);
+//     }
+// }
+
+app.post('/api/correction', async (req, res) => {
+    try {
+        const { problem, date, correctiveAction } = req.body;
+
+        // Validate inputs
+        if (!problem || !date || !correctiveAction) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields: problem, date, correctiveAction'
+            });
+        }
+
+        // Format date
+        const formattedDate = moment(date).format('YYYY-MM-DD');
+
+        // Create new correction record
+        const correction = new Correction({
+            problem,
+            date: formattedDate,
+            correctiveAction
+        });
+
+        // Save to database
+        await correction.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Correction data saved successfully',
+            data: correction
+        });
+
+    } catch (error) {
+        console.error('Error in /api/correction:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error saving correction data',
+            error: error.message
+        });
+    }
+});
+
+app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
-})
+});
