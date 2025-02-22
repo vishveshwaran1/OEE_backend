@@ -6,7 +6,6 @@ const HourlyProduction = require('./models/hourlyProduction');
 const Rejection = require('./models/rejection');
 const OEE = require('./models/oee');
 const StopTime = require('./models/stoptime');
-const Correction = require('./models/correction');
 
 const app = express();
 
@@ -14,7 +13,6 @@ const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
 // MongoDB Connection
 require('./connection');
@@ -222,14 +220,14 @@ app.post('/api/production', async (req, res) => {
         // Format response using moment for consistent date handling
         const responseData = {
             success: true,
-
-            partNumber: latestProduction.partNumber,
-            plan: latestProduction.target,
-            actual: latestProduction.count,
-            shift: latestProduction.shift,
-            date: latestProduction.date,
-            //lastUpdated: moment(latestProduction.date).tz('Asia/Kolkata').format()
-            
+            data: {
+                partNumber: latestProduction.partNumber,
+                plan: latestProduction.target,
+                actual: latestProduction.count,
+                shift: latestProduction.shift,
+                date: latestProduction.date,
+                lastUpdated: moment(latestProduction.date).tz('Asia/Kolkata').format()
+            }
         };
 
         res.status(200).json(responseData);
@@ -252,7 +250,7 @@ app.get('/api/hourly-production-data', async (req, res) => {
         // Get query date
         let queryDate;
         if (date) {
-            queryDate = moment(date).tz('Asia/Kolkata');
+            queryDate = moment(date, 'YYYY-MM-DD').tz('Asia/Kolkata');
         } else {
             // Get latest date from PartDetails
             const latestRecord = await PartDetails.findOne().sort({ date: -1 });
@@ -680,11 +678,11 @@ app.post('/api/quality-data', async (req, res) => {
     try {
         const { rejections, stopTimes, shift, date } = req.body;
 
-        // Validate required inputs
-        if (!shift || !date || !stopTimes) {
+        // Validate inputs
+        if (!shift || !date || !rejections || !stopTimes) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields: shift, date, stopTimes'
+                message: 'Missing required fields: shift, date, rejections, stopTimes'
             });
         }
 
@@ -706,34 +704,19 @@ app.post('/api/quality-data', async (req, res) => {
 
         // Delete existing records
         await Promise.all([
-            StopTime.deleteMany({ shift, date: queryDate }),
-            // Only delete rejections if new rejection data is provided
-            ...(rejections && rejections.length > 0 ? 
-                [Rejection.deleteMany({ shift, date: queryDate })] : 
-                [])
+            Rejection.deleteMany({ shift, date: queryDate }),
+            StopTime.deleteMany({ shift, date: queryDate })
         ]);
 
         // Save new records
-        const saveOperations = [
+        await Promise.all([
+            ...rejections.map(rejection => 
+                new Rejection({ ...rejection, shift, date: queryDate }).save()
+            ),
             ...stopTimes.map(stopTime => 
                 new StopTime({ ...stopTime, shift, date: queryDate }).save()
             )
-        ];
-
-        // Only save rejections if valid data is provided
-        if (rejections && rejections.length > 0 && 
-            rejections.some(r => r.partNumber && r.count && r.reason)) {
-            const validRejections = rejections.filter(r => 
-                r.partNumber && r.count && r.reason
-            );
-            saveOperations.push(
-                ...validRejections.map(rejection => 
-                    new Rejection({ ...rejection, shift, date: queryDate }).save()
-                )
-            );
-        }
-
-        await Promise.all(saveOperations);
+        ]);
 
         // Calculate and save OEE
         await calculateAndSaveOEE(shift, queryDate);
@@ -742,13 +725,7 @@ app.post('/api/quality-data', async (req, res) => {
             success: true,
             message: 'Quality data updated and OEE calculated successfully',
             shift,
-            date: queryDate,
-            details: {
-                stoppagesProcessed: stopTimes.length,
-                rejectionsProcessed: rejections && rejections.length > 0 ? 
-                    rejections.filter(r => r.partNumber && r.count && r.reason).length : 
-                    'No rejections provided'
-            }
+            date: queryDate
         });
 
     } catch (error) {
@@ -760,10 +737,11 @@ app.post('/api/quality-data', async (req, res) => {
         });
     }
 });
+
 async function calculateAndSaveOEE(shift, date) {
     try {
         // Get date range
-        const queryDate = moment(date).tz('Asia/Kolkata').format('YYYY-MM-DD');
+        const queryDate = moment(date, 'YYYY-MM-DD').tz('Asia/Kolkata').format('YYYY-MM-DD');
 
         // Get production data
         const productions = await PartDetails.find({
@@ -782,15 +760,13 @@ async function calculateAndSaveOEE(shift, date) {
 
         const totalStopTime = stopTimes.reduce((sum, stop) => sum + stop.duration, 0);
 
-        // Get rejection data - now optional
+        // Get rejection data
         const rejections = await Rejection.find({
             shift,
             date: queryDate
         });
 
-        // If no rejections found, assume all products are good
-        const totalRejections = rejections.length > 0 ? 
-            rejections.reduce((sum, rej) => sum + rej.count, 0) : 0;
+        const totalRejections = rejections.reduce((sum, rej) => sum + rej.count, 0);
 
         // Calculate OEE components
         const runTime = PLANNED_PRODUCTION_TIME - totalStopTime;
@@ -799,8 +775,7 @@ async function calculateAndSaveOEE(shift, date) {
         const goodCount = totalCount - totalRejections;
         const availability = runTime / PLANNED_PRODUCTION_TIME;
         const performance = (IDEAL_CYCLE_TIME * totalCount) / (runTime * 60);
-        // If no rejections, quality is 100%
-        const quality = rejections.length > 0 ? (goodCount / totalCount) : 1;
+        const quality = goodCount / totalCount;
         const oee = availability * performance * quality;
 
         // Validate calculations
@@ -826,176 +801,6 @@ async function calculateAndSaveOEE(shift, date) {
         throw new Error(`OEE Calculation Error: ${error.message}`);
     }
 }
-
-// app.post('/api/quality-data', async (req, res) => {
-//     try {
-//         const { rejections, stopTimes, shift, date } = req.body;
-//         console.log(req.body);
-
-//         // Validate inputs
-//         if (!shift || !date || !rejections || !stopTimes) {
-//             return res.status(400).json({
-//                 success: false,
-//                 message: 'Missing required fields: shift, date, rejections, stopTimes'
-//             });
-//         }
-
-//         // Format date
-//         const queryDate = moment(date).tz('Asia/Kolkata').format('YYYY-MM-DD');
-
-//         // Validate production exists
-//         const productionExists = await PartDetails.findOne({
-//             shift,
-//             date: queryDate
-//         });
-
-//         if (!productionExists) {
-//             return res.status(404).json({
-//                 success: false,
-//                 message: 'No production data found for the specified shift and date'
-//             });
-//         }
-
-//         // Delete existing records
-//         await Promise.all([
-//             Rejection.deleteMany({ shift, date: queryDate }),
-//             StopTime.deleteMany({ shift, date: queryDate })
-//         ]);
-
-//         // Save new records
-//         await Promise.all([
-//             ...rejections.map(rejection => 
-//                 new Rejection({ ...rejection, shift, date: queryDate }).save()
-//             ),
-//             ...stopTimes.map(stopTime => 
-//                 new StopTime({ ...stopTime, shift, date: queryDate }).save()
-//             )
-//         ]);
-
-//         // Calculate and save OEE
-//         await calculateAndSaveOEE(shift, queryDate);
-
-//         res.status(200).json({
-//             success: true,
-//             message: 'Quality data updated and OEE calculated successfully',
-//             shift,
-//             date: queryDate
-//         });
-
-//     } catch (error) {
-//         console.error('Error in /api/quality-data:', error);
-//         res.status(500).json({
-//             success: false,
-//             message: 'Error processing quality data',
-//             error: error.message
-//         });
-//     }
-// });
-
-// async function calculateAndSaveOEE(shift, date) {
-//     try {
-//         // Get date range
-//         const queryDate = moment(date).tz('Asia/Kolkata').format('YYYY-MM-DD');
-
-//         // Get production data
-//         const productions = await PartDetails.find({
-//             shift,
-//             date: queryDate
-//         });
-
-//         const totalCount = productions.reduce((sum, prod) => sum + prod.count, 0);
-//         if (totalCount === 0) throw new Error('Total count cannot be zero');
-
-//         // Get stoppage data
-//         const stopTimes = await StopTime.find({
-//             shift,
-//             date: queryDate
-//         });
-
-//         const totalStopTime = stopTimes.reduce((sum, stop) => sum + stop.duration, 0);
-
-//         // Get rejection data
-//         const rejections = await Rejection.find({
-//             shift,
-//             date: queryDate
-//         });
-
-//         const totalRejections = rejections.reduce((sum, rej) => sum + rej.count, 0);
-
-//         // Calculate OEE components
-//         const runTime = PLANNED_PRODUCTION_TIME - totalStopTime;
-//         if (runTime <= 0) throw new Error('Run time must be greater than 0');
-
-//         const goodCount = totalCount - totalRejections;
-//         const availability = runTime / PLANNED_PRODUCTION_TIME;
-//         const performance = (IDEAL_CYCLE_TIME * totalCount) / (runTime * 60);
-//         const quality = goodCount / totalCount;
-//         const oee = availability * performance * quality;
-
-//         // Validate calculations
-//         if ([availability, performance, quality, oee].some(val => isNaN(val))) {
-//             throw new Error('Invalid OEE calculation values');
-//         }
-
-//         // Save OEE record
-//         return await OEE.findOneAndUpdate(
-//             { shift, date: queryDate },
-//             {
-//                 availability,
-//                 performance,
-//                 quality,
-//                 oee,
-//                 totalCount,
-//                 goodCount,
-//                 runTime
-//             },
-//             { upsert: true, new: true }
-//         );
-//     } catch (error) {
-//         throw new Error(`OEE Calculation Error: ${error.message}`);
-//     }
-// }
-
-app.post('/api/correction', async (req, res) => {
-    try {
-        const { problem, date, correctiveAction } = req.body;
-
-        // Validate inputs
-        if (!problem || !date || !correctiveAction) {
-            return res.status(400).json({
-                success: false,
-                message: 'Missing required fields: problem, date, correctiveAction'
-            });
-        }
-
-        // Format date
-        const formattedDate = moment(date).format('YYYY-MM-DD');
-
-        // Create new correction record
-        const correction = new Correction({
-            problem,
-            date: formattedDate,
-            correctiveAction
-        });
-
-        // Save to database
-        await correction.save();
-
-        res.status(200).json({
-            success: true,
-            message: 'Correction data saved successfully',
-            data: correction
-        });
-
-    } catch (error) {
-        console.error('Error in /api/correction:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Error saving correction data',
-            error: error.message
-        });
-    }
-});
 
 app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
