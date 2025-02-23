@@ -242,37 +242,55 @@ app.post('/api/production', async (req, res) => {
         // Format part number as string for consistency
         const partNumberStr = partNumber.toString();
 
-        // Get the latest record with proper date sorting
+        // First try to get from PlanActual
         const latestProduction = await PlanActual.findOne({ 
             partNumber: partNumberStr 
         })
         .sort({ 
-            date: -1,  // Sort by date first
-            shift: -1  // Then by shift
+            date: -1,
+            shift: -1 
         })
         .limit(1);
 
-        if (!latestProduction) {
+        // If found in PlanActual, return that data
+        if (latestProduction) {
+            return res.status(200).json({
+                success: true,
+                partNumber: latestProduction.partNumber,
+                plan: latestProduction.plan,
+                actual: latestProduction.actual,
+                shift: latestProduction.shift,
+                date: latestProduction.date
+            });
+        }
+
+        // If not found in PlanActual, try PartDetails
+        const latestPartDetails = await PartDetails.findOne({
+            partNumber: partNumberStr
+        })
+        .sort({
+            date: -1,
+            shift: -1
+        })
+        .limit(1);
+
+        // If not found in either model
+        if (!latestPartDetails) {
             return res.status(404).json({
                 success: false,
                 message: 'No production data found for this part number'
             });
         }
 
-        // Format response using moment for consistent date handling
-        const responseData = {
+        // Return data from PartDetails
+        return res.status(200).json({
             success: true,
-
-            partNumber: latestProduction.partNumber,
-            plan: latestProduction.plan,
-            actual: latestProduction.actual,
-            shift: latestProduction.shift,
-            date: latestProduction.date,
-            //lastUpdated: moment(latestProduction.date).tz('Asia/Kolkata').format()
-            
-        };
-
-        res.status(200).json(responseData);
+            partNumber: latestPartDetails.partNumber,
+            plan: latestPartDetails.target,  // target in PartDetails is equivalent to plan
+            actual: latestPartDetails.count, // count in PartDetails is equivalent to actual
+            shift: latestPartDetails.shift,
+            date: latestPartDetails.date
+        });
 
     } catch (error) {
         console.error('Error in /api/production:', error);
