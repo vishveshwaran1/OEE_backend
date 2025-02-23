@@ -7,6 +7,7 @@ const Rejection = require('./models/rejection');
 const OEE = require('./models/oee');
 const StopTime = require('./models/stoptime');
 const Correction = require('./models/correction');
+const PlanActual = require('./models/planActual');
 
 const app = express();
 
@@ -27,6 +28,11 @@ const PLANNED_PRODUCTION_TIME = (10 * 60) + 30; // 10 hours 30 minutes
 function getCurrentIST() {
     return moment().tz('Asia/Kolkata');
 }
+
+function getHourNumber(timeString) {
+    return parseInt(timeString.split(":")[0], 10);
+}
+
 
 function getCurrentShiftAndDate() {
     const currentIST = getCurrentIST();
@@ -131,7 +137,7 @@ app.post('/spark/data', async (req, res) => {
                 count: count, // First hour count
                 cumulativeCount: count // Same as count for first entry
             });
-        } else if (lastHourlyRecord.hour.split(":")[0] === currentHour.split(":")[0]) {
+        } else if (getHourNumber(lastHourlyRecord.hour) === getHourNumber(currentHour)) {
             console.log("record update for the same hour");
             // Update existing hour's record
             const hourlyCount = count - (lastHourlyRecord.cumulativeCount - lastHourlyRecord.count);
@@ -159,6 +165,36 @@ app.post('/spark/data', async (req, res) => {
 
         await hourlyRecord.save();
 
+        // Find or create PlanActual record
+        let planActual = await PlanActual.findOne({
+            partNumber: partNumber.toString(),
+            shift,
+            date
+        });
+
+        if (planActual) {
+            // Update only the actual value
+            planActual = await PlanActual.findOneAndUpdate(
+                {
+                    partNumber: partNumber.toString(),
+                    shift,
+                    date
+                },
+                { actual: count },
+                { new: true }
+            );
+        } else {
+            // Create new record with target as plan
+            planActual = new PlanActual({
+                partNumber: partNumber.toString(),
+                plan: target,
+                actual: count,
+                shift,
+                date
+            });
+            await planActual.save();
+        }
+
         res.status(200).json({
             success: true,
             message: 'Production data updated successfully',
@@ -174,6 +210,10 @@ app.post('/spark/data', async (req, res) => {
                     hour: hourlyRecord.hour,
                     count: hourlyRecord.count,
                     cumulativeCount: hourlyRecord.cumulativeCount
+                },
+                planActual: {
+                    plan: planActual.plan,
+                    actual: planActual.actual
                 }
             }
         });
@@ -203,7 +243,7 @@ app.post('/api/production', async (req, res) => {
         const partNumberStr = partNumber.toString();
 
         // Get the latest record with proper date sorting
-        const latestProduction = await PartDetails.findOne({ 
+        const latestProduction = await PlanActual.findOne({ 
             partNumber: partNumberStr 
         })
         .sort({ 
@@ -224,8 +264,8 @@ app.post('/api/production', async (req, res) => {
             success: true,
 
             partNumber: latestProduction.partNumber,
-            plan: latestProduction.target,
-            actual: latestProduction.count,
+            plan: latestProduction.plan,
+            actual: latestProduction.actual,
             shift: latestProduction.shift,
             date: latestProduction.date,
             //lastUpdated: moment(latestProduction.date).tz('Asia/Kolkata').format()
@@ -992,6 +1032,90 @@ app.post('/api/correction', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error saving correction data',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/set-plan', async (req, res) => {
+    try {
+        const { partNumber, plan, date, shift } = req.body;
+
+        // Validate inputs
+        if (!partNumber || !plan || !date || !shift) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields: partNumber, plan, date, shift'
+            });
+        }
+
+        // Create or update plan
+        const planActual = await PlanActual.findOneAndUpdate(
+            {
+                partNumber: partNumber.toString(),
+                date,
+                shift
+            },
+            {
+                partNumber: partNumber.toString(),
+                plan,
+                date,
+                shift
+            },
+            { upsert: true, new: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Plan set successfully',
+            data: planActual
+        });
+
+    } catch (error) {
+        console.error('Error in /api/set-plan:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error setting plan',
+            error: error.message
+        });
+    }
+});
+
+app.get('/api/recent-plan-actual', async (req, res) => {
+    try {
+        // Get the last 8 records, sorted by date and shift
+        const recentRecords = await PlanActual.find()
+            .sort({ 
+                date: -1,  // Sort by date descending
+                shift: -1  // Then by shift descending
+            })
+            .limit(8);
+
+        if (!recentRecords || recentRecords.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'No plan-actual records found'
+            });
+        }
+
+        // Format the response data
+        const formattedData = recentRecords.map(record => ({
+            plan: record.plan,
+            actual: record.actual,
+            date: record.date,
+            shift: record.shift
+        }));
+
+        res.status(200).json({
+            success: true,
+            data: formattedData
+        });
+
+    } catch (error) {
+        console.error('Error in /api/recent-plan-actual:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching recent plan-actual data',
             error: error.message
         });
     }
