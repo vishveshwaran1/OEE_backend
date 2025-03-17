@@ -242,27 +242,27 @@ app.post('/api/production', async (req, res) => {
         // Format part number as string for consistency
         const partNumberStr = partNumber.toString();
 
-        // First try to get from PlanActual
-        const latestProduction = await PlanActual.findOne({ 
-            partNumber: partNumberStr 
-        })
-        .sort({ 
-            date: -1,
-            shift: -1 
-        })
-        .limit(1);
+        // // First try to get from PlanActual
+        // const latestProduction = await PlanActual.findOne({ 
+        //     partNumber: partNumberStr 
+        // })
+        // .sort({ 
+        //     date: -1,
+        //     shift: -1 
+        // })
+        // .limit(1);
 
-        // If found in PlanActual, return that data
-        if (latestProduction) {
-            return res.status(200).json({
-                success: true,
-                partNumber: latestProduction.partNumber,
-                plan: latestProduction.plan,
-                actual: latestProduction.actual,
-                shift: latestProduction.shift,
-                date: latestProduction.date
-            });
-        }
+        // // If found in PlanActual, return that data
+        // if (latestProduction) {
+        //     return res.status(200).json({
+        //         success: true,
+        //         partNumber: latestProduction.partNumber,
+        //         plan: latestProduction.plan,
+        //         actual: latestProduction.actual,
+        //         shift: latestProduction.shift,
+        //         date: latestProduction.date
+        //     });
+        // }
 
         // If not found in PlanActual, try PartDetails
         const latestPartDetails = await PartDetails.findOne({
