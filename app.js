@@ -117,41 +117,55 @@ app.post('/spark/data', async (req, res) => {
         console.log(partNumber,shift,date);
 
         // Handle HourlyProduction
-        const lastHourlyRecord = await HourlyProduction.findOne({
-            partNumber: partNumber.toString(),
-            shift,
-            date
-        }).sort({ hour: -1 });
+        let lastHourlyRecord;
+        if (shift === 'shift-2' && currentHour >= '00:00' && currentHour <= '07:00') {
+            // For early hours on shift-2, adjust by adding 24 to hours less than 7
+            const records = await HourlyProduction.find({
+                partNumber: partNumber.toString(),
+                shift,
+                date
+            });
+            if (records.length > 0) {
+                const getAdjustedTime = (record) => {
+                    let [h, m] = record.hour.split(':').map(Number);
+                    if (h < 7) {
+                        h += 24;
+                    }
+                    return h * 60 + m;
+                };
+                lastHourlyRecord = records.reduce((prev, curr) =>
+                    getAdjustedTime(curr) > getAdjustedTime(prev) ? curr : prev
+                );
+            }
+        } else {
+            lastHourlyRecord = await HourlyProduction.findOne({
+                partNumber: partNumber.toString(),
+                shift,
+                date
+            }).sort({ hour: -1 });
+        }
 
         let hourlyRecord;
-        console.log("last hour "+ lastHourlyRecord.hour.split(":")[0],currentHour.split(":")[0]);
-        
         if (!lastHourlyRecord) {
             console.log("first entry for the shift");
-            // First entry for this shift
             hourlyRecord = new HourlyProduction({
                 partNumber: partNumber.toString(),
                 shift,
                 date,
                 hour: currentHour,
-                count: count, // First hour count
-                cumulativeCount: count // Same as count for first entry
+                count: count,
+                cumulativeCount: count
             });
         } else if (getHourNumber(lastHourlyRecord.hour) === getHourNumber(currentHour)) {
             console.log("record update for the same hour");
-            // Update existing hour's record
             const hourlyCount = count - (lastHourlyRecord.cumulativeCount - lastHourlyRecord.count);
             hourlyRecord = await HourlyProduction.findByIdAndUpdate(
                 lastHourlyRecord._id,
-                {
-                    count: hourlyCount,
-                    cumulativeCount: count
-                },
+                { count: hourlyCount, cumulativeCount: count },
                 { new: true }
             );
         } else {
             console.log("new hour within the same shift");
-            // New hour within same shift
             const hourlyCount = count - lastHourlyRecord.cumulativeCount;
             hourlyRecord = new HourlyProduction({
                 partNumber: partNumber.toString(),
@@ -242,27 +256,27 @@ app.post('/api/production', async (req, res) => {
         // Format part number as string for consistency
         const partNumberStr = partNumber.toString();
 
-        // // First try to get from PlanActual
-        // const latestProduction = await PlanActual.findOne({ 
-        //     partNumber: partNumberStr 
-        // })
-        // .sort({ 
-        //     date: -1,
-        //     shift: -1 
-        // })
-        // .limit(1);
+        // First try to get from PlanActual
+        const latestProduction = await PlanActual.findOne({ 
+            partNumber: partNumberStr 
+        })
+        .sort({ 
+            date: -1,
+            shift: -1 
+        })
+        .limit(1);
 
-        // // If found in PlanActual, return that data
-        // if (latestProduction) {
-        //     return res.status(200).json({
-        //         success: true,
-        //         partNumber: latestProduction.partNumber,
-        //         plan: latestProduction.plan,
-        //         actual: latestProduction.actual,
-        //         shift: latestProduction.shift,
-        //         date: latestProduction.date
-        //     });
-        // }
+        // If found in PlanActual, return that data
+        if (latestProduction) {
+            return res.status(200).json({
+                success: true,
+                partNumber: latestProduction.partNumber,
+                plan: latestProduction.plan,
+                actual: latestProduction.actual,
+                shift: latestProduction.shift,
+                date: latestProduction.date
+            });
+        }
 
         // If not found in PlanActual, try PartDetails
         const latestPartDetails = await PartDetails.findOne({
