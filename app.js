@@ -114,7 +114,7 @@ app.post('/spark/data', async (req, res) => {
             await partDetails.save();
         }
 
-        //console.log(partNumber,shift,date);
+        console.log(partNumber,shift,date);
 
         // Handle HourlyProduction
         const lastHourlyRecord = await HourlyProduction.findOne({
@@ -124,7 +124,7 @@ app.post('/spark/data', async (req, res) => {
         }).sort({ hour: -1 });
 
         let hourlyRecord;
-        //console.log(lastHourlyRecord.hour.split(":")[0],currentHour.split(":")[0]);
+        console.log("last hour "+ lastHourlyRecord.hour.split(":")[0],currentHour.split(":")[0]);
         
         if (!lastHourlyRecord) {
             console.log("first entry for the shift");
