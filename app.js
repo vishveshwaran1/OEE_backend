@@ -288,6 +288,8 @@ app.post('/api/production', async (req, res) => {
         })
         .limit(1);
 
+        console.log(latestPartDetails);
+
         // If not found in either model
         if (!latestPartDetails) {
             return res.status(404).json({
