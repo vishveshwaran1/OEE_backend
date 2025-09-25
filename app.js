@@ -11,6 +11,7 @@ const PlanActual = require('./models/planActual');
 const sendEmail = require('./models/sendemail');
 const cron = require('node-cron');
 const hourlyProduction = require('./models/hourlyProduction');
+require('dotenv').config();
 
 
 const app = express();
